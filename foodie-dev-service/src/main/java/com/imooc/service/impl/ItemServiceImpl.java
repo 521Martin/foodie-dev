@@ -13,6 +13,10 @@ import com.imooc.pojo.vo.ShopcartVO;
 import com.imooc.service.ItemService;
 import com.imooc.utils.DesensitizationUtil;
 import com.imooc.utils.PagedGridResult;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -20,9 +24,12 @@ import org.springframework.transaction.annotation.Transactional;
 import tk.mybatis.mapper.entity.Example;
 
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class ItemServiceImpl implements ItemService {
+
+    final static Logger logger = LoggerFactory.getLogger(ItemServiceImpl.class);
 
     @Autowired
     private ItemsMapper itemsMapper;
@@ -36,6 +43,9 @@ public class ItemServiceImpl implements ItemService {
     private ItemsCommentsMapper itemsCommentsMapper;
     @Autowired
     private ItemsMapperCustom itemsMapperCustom;
+
+    @Autowired
+    private RedissonClient redisson;
 
     @Transactional(propagation = Propagation.SUPPORTS)
     @Override
@@ -211,10 +221,35 @@ public class ItemServiceImpl implements ItemService {
 
         // lockUtil.unLock(); -- 解锁
 
+        /**
+         *  分布式锁【3】 编写业务代码
+         *  1、Redisson是基于Redis，使用Redisson之前，项目必须使用Redis
+         *   2、注意getLock方法中的参数，以specId作为参数，每个specId一个key，和
+         *   数据库中的行锁是一致的，不会是方法级别的锁
+         */
+        RLock rLock = redisson.getLock("SPECID_"+specId);
+        try {
+            /**
+             * 1、获取分布式锁，锁的超时时间是5秒get
+             *  2、获取到了锁，进行后续的业务操作
+             */
+            rLock.lock(5, TimeUnit.HOURS);
 
-        int result = itemsMapperCustom.decreaseItemSpecStock(specId, buyCounts);
-        if (result != 1) {
-            throw new RuntimeException("订单创建失败，原因：库存不足!");
+            int result = itemsMapperCustom.decreaseItemSpecStock(specId, buyCounts);
+            if (result != 1) {
+                throw new RuntimeException("订单创建失败，原因：库存不足!");
+            }
+        } catch (Exception e) {
+            logger.error(e.getMessage(),e);
+            throw new RuntimeException(e.getMessage(),e);
+        }finally {
+            /**
+             *  不管业务是否操作正确，随后都要释放掉分布式锁
+             *   如果不释放，过了超时时间也会自动释放
+             */
+            rLock.unlock();
         }
+
+
     }
 }
