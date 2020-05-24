@@ -218,7 +218,7 @@ public class ItemServiceImpl implements ItemService {
             // 提示用户库存不够
 //            10 - 3 -3 - 5 = -1
 //        }
-
+ 
         // lockUtil.unLock(); -- 解锁
 
         /**
